@@ -1,0 +1,18 @@
+# Ignore build artifacts
+build/
+dist/
+node_modules/
+
+# Ignore temporary files
+*.tmp
+*.log
+
+# Ignore editor-specific files
+.vscode/
+.idea/
+
+# Ignore environment variables
+.env
+
+# Exception to an ignored pattern
+!important.log
