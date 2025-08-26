@@ -1,4 +1,25 @@
+require('dotenv').config();
+const jwt = require('jsonwebtoken');
+const dotenv = require('dotenv');
+const bcrypt = require('bcrypt');
 const express = require('express');
+const db = require('better-sqlite3')('BlogLite.db');
+db.pragma("journal_mode = WAL");
+
+const createTables = db.transaction(() => {
+  db.prepare(
+    `
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username string NOT NULL UNIQUE,
+      password string NOT NULL
+    )
+    `
+  ).run()
+})
+
+createTables();
+
 const app = express();
 
 app.set('view engine', 'ejs');
@@ -39,10 +60,29 @@ app.post('/register', (req, res) => {
     return res.render('homepage', { errors });
   }
     
-  res.send("Thank you for registering");
+  const salt = bcrypt.genSaltSync(10);
+  req.body.password = bcrypt.hashSync(req.body.password, salt);
 
-  
-  
+  const statement = db.prepare("INSERT INTO users (username, password) VALUES (?, ?)");
+  const result = statement.run(req.body.username, req.body.password);
+
+  const lookupStatement = db.prepare("SELECT * FROM users WHERE ROWID = ?");
+  const ourUser = lookupStatement.get(result.lastInsertRowid);
+
+  const token = jwt.sign(
+    { username: req.body.username },
+    process.env.JWT_SECRET
+  );
+
+  res.cookie('BlogLiteUser', req.body.username, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'strict',
+    maxAge: 1000 * 60 * 60 * 24 * 7 // 1 week
+  });
+
+
+  res.send('Registration successful');
 });
 
 app.listen(3000);
