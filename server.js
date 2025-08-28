@@ -1,5 +1,6 @@
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
+const sanitizeHTML = require('sanitize-html');
 const dotenv = require('dotenv');
 const bcrypt = require('bcrypt');
 const cookieParser = require('cookie-parser');
@@ -14,6 +15,19 @@ const createTables = db.transaction(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username string NOT NULL UNIQUE,
       password string NOT NULL
+    )
+    `
+  ).run()
+
+  db.prepare(
+    `
+    CREATE TABLE IF NOT EXISTS posts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      createdDate TEXT,
+      title STRING NOT NULL,
+      body TEXT NOT NULL,
+      authorid INTEGER,
+      FOREIGN KEY (authorid) REFERENCES users (id)
     )
     `
   ).run()
@@ -67,6 +81,48 @@ app.get('/logout', (req, res) => {
 app.get('/login', (req, res) => {
   res.render('login');
 });
+
+// Middleware for creating a post
+function mustBeLoggedIn(req, res, next) {
+  if (req.user) {
+    return next(); 
+  }
+  return res.redirect('/');
+}
+
+// Create post routes
+app.get("/create-post", mustBeLoggedIn, (req, res) => {
+  res.render("create-post");
+});
+
+function sharedPostValidation(req) {
+  const errors = [];  
+
+  if (typeof req.body.title !== 'string') req.body.title = '';
+  if (typeof req.body.body !== 'string') req.body.body = '';
+
+  req.body.title = sanitizeHTML(req.body.title.trim(), { allowedTags: [], allowedAttributes: {} });
+  req.body.body = sanitizeHTML(req.body.body.trim(), { allowedTags: [], allowedAttributes: {} });
+
+  if (!req.body.title) errors.push('You must provide a title');
+  if (!req.body.body) errors.push('You must provide post content');
+
+  return errors;
+};
+
+// Handle post creation
+app.post("/create-post", mustBeLoggedIn, (req, res) => {
+  const errors = sharedPostValidation(req);
+
+  if (errors.length) { // if there are errors, return early
+    return res.render('create-post', { errors });
+  }
+
+  const statement = db.prepare("INSERT INTO posts (createdDate, title, body, authorid) VALUES (?, ?, ?, ?)");
+  const result = statement.run(new Date().toISOString(), req.body.title, req.body.body, req.user.userid);
+
+});
+
 
 app.post('/login', (req, res) => {
   let errors = [];
@@ -124,6 +180,11 @@ app.post('/register', (req, res) => {
   if (req.body.username && req.body.username.length < 3) errors.push('Username must be at least 3 characters long');
   if (req.body.username && req.body.username.length > 10) errors.push('Username cannot exceed 10 characters');
   if (req.body.username && !req.body.username.match(/^[a-zA-Z0-9]+$/)) errors.push('Username can only contain letters and numbers');
+
+  // Check if username is already taken
+  const usernameStatement = db.prepare("SELECT * FROM users WHERE USERNAME = ?");
+  const existingUser = usernameStatement.get(req.body.username);
+  if (existingUser) errors.push('Username is already taken');
 
   if (!req.body.password) errors.push('Password is required');
   if (req.body.password && req.body.password.length < 8) errors.push('Password must be at least 8 characters long');
