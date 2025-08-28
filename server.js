@@ -2,6 +2,7 @@ require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const dotenv = require('dotenv');
 const bcrypt = require('bcrypt');
+const cookieParser = require('cookie-parser');
 const express = require('express');
 const db = require('better-sqlite3')('BlogLite.db');
 db.pragma("journal_mode = WAL");
@@ -25,20 +26,92 @@ const app = express();
 app.set('view engine', 'ejs');
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static('public'));
+app.use(cookieParser());
 
+// Middleware
 app.use(function (req, res, next) {
   res.locals.errors = [];
+
+  // Check for JWT cookie
+  try {
+    const decoded = jwt.verify(req.cookies.BlogLiteUser, process.env.JWTSECRET);
+    req.user = decoded;
+  } catch (e) {
+    // Invalid token
+    req.user = false;
+  }
+
+  res.locals.user = req.user;
+  console.log(req.user);
+
   next();
 });
 
+// Homepage route
 app.get('/', (req, res) => {
+
+  if (req.user) {
+    return res.render('dashboard');
+  }
+
   res.render('homepage');
 });
 
+// Logout route
+app.get('/logout', (req, res) => {
+  res.clearCookie('BlogLiteUser');
+  res.redirect('/');
+});
+
+// Login route
 app.get('/login', (req, res) => {
   res.render('login');
 });
 
+app.post('/login', (req, res) => {
+  let errors = [];
+
+  if (typeof req.body.username !== 'string') req.body.username = '';
+  if (typeof req.body.password !== 'string') req.body.password = '';
+
+  if (req.body.username.trim() === '') errors = ['Invalid username or password'];
+  if (req.body.password === '') errors = ['Invalid username or password'];
+
+  if (errors.length) { // if there are errors, return early
+    return res.render('login', { errors });
+  }
+
+  const statement = db.prepare("SELECT * FROM users WHERE USERNAME = ?");
+  const user = statement.get(req.body.username);
+
+  if (!user) {
+    errors = ['Invalid username or password'];
+    return res.render('login', { errors });
+  }
+
+  const match = bcrypt.compareSync(req.body.password, user.password);
+  if (!match) {
+    errors = ['Invalid username or password'];
+    return res.render('login', { errors });
+  }
+
+  const token = jwt.sign( // Expires in 24 hours
+    { exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, userid: user.id, username: user.username },
+    process.env.JWTSECRET
+  );
+
+  res.cookie('BlogLiteUser', token, {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'strict',
+    maxAge: 1000 * 60 * 60 * 24 * 7 // 1 week
+  });
+
+  res.redirect('/');
+
+});
+
+// Registration route
 app.post('/register', (req, res) => {
   const errors = [];
 
@@ -56,7 +129,7 @@ app.post('/register', (req, res) => {
   if (req.body.password && req.body.password.length < 8) errors.push('Password must be at least 8 characters long');
   if (req.body.password && req.body.password.length > 20) errors.push('Password cannot exceed 20 characters');
 
-  if (errors.length) {
+  if (errors.length) { // if there are errors, return early
     return res.render('homepage', { errors });
   }
     
@@ -69,12 +142,12 @@ app.post('/register', (req, res) => {
   const lookupStatement = db.prepare("SELECT * FROM users WHERE ROWID = ?");
   const ourUser = lookupStatement.get(result.lastInsertRowid);
 
-  const token = jwt.sign(
-    { username: req.body.username },
-    process.env.JWT_SECRET
+  const token = jwt.sign( // Expires in 24 hours
+    { exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, userid: ourUser.id, username: ourUser.username },
+    process.env.JWTSECRET
   );
 
-  res.cookie('BlogLiteUser', req.body.username, {
+  res.cookie('BlogLiteUser', token, {
     httpOnly: true,
     secure: true,
     sameSite: 'strict',
